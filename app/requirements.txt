@@ -3,3 +3,4 @@ Flask-SQLAlchemy==3.0.3
 psycopg2-binary==2.9.6
 redis==5.0.0
 gunicorn==21.2.0
+prometheus_client==0.24.1

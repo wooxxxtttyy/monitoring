@@ -3,8 +3,56 @@ import psycopg2 # type: ignore
 import redis # type: ignore
 import json
 import os
+from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST # type: ignore
+import time
 
 app = Flask(__name__)
+
+REQUEST_COUNT = Counter(
+    "app_requests_total",
+    "Total HTTP requests",
+    ["method", "endpoint", "http_status"]
+)
+
+REQUEST_LATENCY = Histogram(
+    "app_request_latency_seconds",
+    "Request latency",
+    ["endpoint"]
+)
+
+DB_ERRORS = Counter(
+    "db_errors_total",
+    "Total DB errors"
+)
+
+@app.before_request
+def start_timer():
+    request.start_time = time.time()
+
+@app.after_request
+def record_metrics(response):
+    resp_time = time.time() - request.start_time
+    REQUEST_LATENCY.labels(request.path).observe(resp_time)
+    REQUEST_COUNT.labels(request.method, request.path, response.status_code).inc()
+    return response
+
+@app.errorhandler(Exception)
+def handle_error(error):
+    endpoint = request.path
+    status = "500"
+
+    if hasattr(error, "code"):
+        status = str(error.code)
+
+    REQUEST_COUNT.labels(request.method, endpoint, status).inc()
+
+    if hasattr(request, "start_time"):
+        duration = time.time() - request.start_time
+        REQUEST_LATENCY.labels(endpoint).observe(duration)
+
+    if hasattr(error, "code"):
+        return jsonify({"error": str(error)}), error.code
+    return jsonify({"error": "Internal Server Error"}), 500
 
 # подключаемся к бдшке 
 def get_pg():
@@ -151,6 +199,10 @@ def delete_user(user_id):
     cache.delete(f"participant_{user_id}")
 
     return jsonify({"message": f"User {user_id} deleted"})
+
+@app.route("/metrics")
+def metrics():
+    return generate_latest(), 200, {"Content-Type": CONTENT_TYPE_LATEST}
 
 bootstrap_db()
 
